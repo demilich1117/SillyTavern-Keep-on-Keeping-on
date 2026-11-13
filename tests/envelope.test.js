@@ -46,18 +46,18 @@ test('最后一条 user 的文字只在工具结果里出现；保留媒体、�
     assert.deepEqual(body, original);
     assert.equal(messages[0].role, 'system');
     assert.deepEqual(messages[1], original.messages[0]);
-    assert.deepEqual(messages.at(-2), original.messages[2]);
+    assert.deepEqual(messages[3], original.messages[2]);
     assert.equal(messages[2].name, 'Alice');
     assert.deepEqual(messages[2].content.filter(p => p.type === 'image_url'), [image, image]);
-    const call = messages[3].tool_calls[0];
-    assert.equal(messages[4].content, '材料一\n材料二');
+    const call = messages[4].tool_calls[0];
+    assert.deepEqual(JSON.parse(messages[5].content), { request_id: JSON.parse(call.function.arguments).request_id, input: '材料一\n材料二' });
     assert.ok(messages[2].content.some(p => p.text?.includes(JSON.parse(call.function.arguments).request_id)));
-    assert.equal(messages[4].tool_call_id, call.id);
+    assert.equal(messages[5].tool_call_id, call.id);
     assert.equal(messages.at(-1).role, 'user');
     assert.deepEqual(tools.map(t => t.function.name), [READ, EMIT]);
     assert.equal(tool_choice, 'auto');
     assert.equal(JSON.stringify(messages).split('材料一').length, 2);
-    assert.notEqual(prepare(body, both).request.messages[3].tool_calls[0].id, call.id);
+    assert.notEqual(prepare(body, both).request.messages[4].tool_calls[0].id, call.id);
 });
 
 test('图片输入和两种独立模式', async () => {
@@ -68,7 +68,7 @@ test('图片输入和两种独立模式', async () => {
         assert.equal(body.stream, true);
         assert.deepEqual(body.messages[0].content.filter(p => p.type !== 'text'), [image]);
         assert.equal(body.tool_choice, 'none');
-        assert.equal(body.messages.at(-1).content, '');
+        assert.equal(JSON.parse(body.messages.at(-1).content).input, '');
         return response;
     }, { input: true });
     assert.equal(await h.send(original), response);
@@ -117,7 +117,7 @@ test('严格和半严格按最终 user 分组，将协议写入初始系统区�
         assert.ok(request.messages[1].content.startsWith('世界设定\n\n'));
         assert.ok(request.messages[1].content.includes(EMIT));
         assert.equal(request.messages.at(-1).role, 'tool');
-        assert.equal(request.messages.at(-1).content, '时间线\n\n玩家: 过桥\n\n<格式>两段</格式>');
+        assert.equal(JSON.parse(request.messages.at(-1).content).input, '时间线\n\n玩家: 过桥\n\n<格式>两段</格式>');
         assert.ok(request.messages.at(-3).content.includes(EMIT));
         assert.equal(JSON.stringify(request.messages).split('过桥').length, 2);
     }
@@ -128,14 +128,17 @@ test('首轮系统区、合并 user、尾部预填和继续生成', () => {
         { role: 'user', content: 'A' }, { role: 'user', content: 'B' }, { role: 'system', content: '尾注' }];
     for (const [processing, expected] of [['strict', 'A\n\nB\n\n尾注'], ['merge', 'A\n\nB'], ['', 'B']]) {
         const plan = prepare(req({ messages, custom_prompt_post_processing: processing }), { input: true });
-        assert.equal(plan.request.messages.at(-1).content, expected);
+        assert.equal(JSON.parse(plan.request.messages.at(-1).content).input, expected);
     }
     const b = req({ messages: [...messages, { role: 'assistant', content: '预填' }], custom_prompt_post_processing: 'strict' });
-    assert.equal(prepare(b, { input: true }).request.messages.at(-1).content, '预填');
+    assert.equal(prepare(b, { input: true }).request.messages.at(-3).content, '预填');
     const cont = prepare({ ...b, type: 'continue' }, both);
-    assert.equal(cont.inputTurns, 0);
-    assert.deepEqual(cont.request.tools.map(t => t.function.name), [EMIT]);
-    assert.equal(prepare({ ...b, type: 'continue' }, { input: true }).request, undefined);
+    assert.equal(cont.inputTurns, 3);
+    assert.deepEqual(cont.request.tools.map(t => t.function.name), [READ, EMIT]);
+    const tail = prepare({ ...b, type: 'continue' }, { input: true }).request.messages.slice(-3);
+    assert.equal(tail[0].content, '预填');
+    assert.equal(tail[2].tool_call_id, tail[1].tool_calls[0].id);
+    assert.deepEqual(JSON.parse(tail[2].content), { request_id: JSON.parse(tail[1].tool_calls[0].function.arguments).request_id, input: 'A\n\nB\n\n尾注' });
 });
 
 test('自动交付接受正常结束的纯正文，强制模式、截断和混杂回复仍然拒绝', async () => {

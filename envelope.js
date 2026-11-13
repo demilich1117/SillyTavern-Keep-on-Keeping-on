@@ -37,7 +37,7 @@ function inputRange(messages, processing) {
     const strict = processing === 'strict_tools' || processing === 'semi_tools';
     if (strict) {
         const head = messages.findIndex(m => m.role !== 'system');
-        const end = messages.findLastIndex(m => m.role !== 'assistant');
+        const end = messages.findLastIndex((m, i) => i >= head && head >= 0 && ['user', 'system'].includes(m.role));
         let start = end + 1;
         while (head >= 0 && start > head && ['user', 'system'].includes(messages[start - 1].role)) start--;
         return start > end ? null : [start, end];
@@ -85,7 +85,7 @@ function materialOf(turns, processing, body, ref) {
             }
         }
     }
-    if (!referenced) parts.unshift({ type: 'text', text: ref });
+    if (!referenced && ref.includes(delivery)) parts.push({ type: 'text', text: delivery });
     const raw = text.join('\n\n');
     if (!raw.trim() && parts.every(p => p.type === 'text')) return null;
     const first = turns[0];
@@ -114,8 +114,8 @@ export function prepare(body, { input, output, strictOutput = false }, newId = u
     const messages = [...body.messages];
     const tools = [];
     const prefill = messages.at(-1).role === 'assistant' || Boolean(body.assistant_prefill?.trim());
-    const range = input && body.type !== 'continue' ? inputRange(messages, processing) : null;
-    if (!range && !output) return skip(prefill ? '保留助手预填' : '没有可包装的新输入');
+    const range = input ? inputRange(messages, processing) : null;
+    if (!range && !output) return skip('没有可包装的用户回合');
     if (range) {
         const [start, end] = range;
         const request_id = newId();
@@ -131,10 +131,9 @@ export function prepare(body, { input, output, strictOutput = false }, newId = u
         if (!isGoogle(body.chat_completion_source) && /gemini/i.test(body.model ?? '')) {
             call.extra_content = { google: { thought_signature: 'skip_thought_signature_validator' } };
         }
-        // Keep a trailing assistant prefill in its original delivery position.
-        const insertAt = messages.findLastIndex(m => m.role !== 'assistant') + 1;
-        messages.splice(insertAt, 0, { role: 'assistant', content: null, tool_calls: [call] },
-            { role: 'tool', tool_call_id: id, content: material.raw });
+        // MMDB appends the paired read history after all original turns, including prefill.
+        messages.push({ role: 'assistant', content: null, tool_calls: [call] },
+            { role: 'tool', tool_call_id: id, content: JSON.stringify({ request_id, input: material.raw }) });
         tools.push(tool(READ, '提供本轮用户输入；本地读取已经完成。', 'request_id'));
     }
     if (output) {

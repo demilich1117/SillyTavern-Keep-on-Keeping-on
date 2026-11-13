@@ -24,7 +24,9 @@ const server = http.createServer(async (req, res) => {
             const call = parts.find(p => p.functionCall?.name === READ)?.functionCall;
             const result = parts.find(p => p.functionResponse?.name === READ)?.functionResponse;
             assert.ok(parts.some(p => p.text?.includes(call.args.request_id)));
-            assert.match(result.response.content, /封装验收/);
+            const resultData = JSON.parse(result.response.content);
+            assert.equal(resultData.request_id, call.args.request_id);
+            assert.match(resultData.input, /封装验收/);
             assert.ok(!parts.some(p => p.text?.includes('封装验收')));
             assert.ok(b.tools.some(t => t.function_declarations?.some(f => f.name === EMIT)));
             assert.ok(['AUTO', 'ANY'].includes(b.toolConfig.functionCallingConfig.mode));
@@ -38,7 +40,9 @@ const server = http.createServer(async (req, res) => {
         assert.equal(call.id, user.tool_call_id);
         const id = JSON.parse(call.function.arguments).request_id;
         assert.ok(b.messages.some(m => JSON.stringify(m.content)?.includes(id)));
-        assert.match(user.content, /封装验收/);
+        const resultData = JSON.parse(user.content);
+        assert.equal(resultData.request_id, id);
+        assert.match(resultData.input, /封装验收/);
         assert.ok(!b.messages.filter(m => m.role !== 'tool').some(m => JSON.stringify(m.content).includes('封装验收')));
         assert.ok(b.tools.some(t => t.function.name === EMIT));
         assert.ok(b.tool_choice === 'auto' || b.tool_choice?.function?.name === EMIT);

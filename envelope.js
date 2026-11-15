@@ -5,9 +5,10 @@ export const isGoogle = source => source === 'makersuite' || source === 'vertexa
 const sources = new Set(['openai', 'custom', 'openrouter', 'makersuite', 'vertexai']);
 const chatTypes = new Set(['normal', 'regenerate', 'swipe', 'continue', 'impersonate']);
 const contract = '[客户端交付协议]\n本轮通过一次真实的 ' + EMIT +
-    ' 函数调用提交最终答复。把用户可见的完整正文放进唯一字符串参数 content，保留原任务要求的语言、段落、标签和格式。' +
-    '函数外不另写正文，参数里不写内部思考，也不要用代码块模拟调用。';
-const delivery = '请按原任务完成本轮回复，通过 ' + EMIT + ' 的 content 提交完整正文。';
+    ' 函数调用提交原任务的完整结果。把结果放进唯一字符串参数 content，保留原任务要求的语言、段落、标签和格式。' +
+    '若原任务要求 JSON、表格更新指令或其他机器可读文本，将其原样作为 content 字符串，不添加解释或额外格式。' +
+    '函数外不另写结果，参数里不写内部思考，也不要用代码块模拟调用。';
+const delivery = '请按原任务完成本轮处理，通过 ' + EMIT + ' 的 content 提交完整结果，保持原任务要求的格式。';
 const toolProcessing = new Map([
     ['', ''], ['none', ''], ['merge', 'merge_tools'], ['claude', 'merge_tools'], ['merge_tools', 'merge_tools'],
     ['semi', 'semi_tools'], ['semi_tools', 'semi_tools'], ['strict', 'strict_tools'], ['strict_tools', 'strict_tools'],
@@ -16,7 +17,7 @@ const toolProcessing = new Map([
 function tool(name, description, key) {
     return { type: 'function', function: { name, description, parameters: {
         type: 'object', properties: { [key]: { type: 'string', description:
-            key === 'content' ? '完整的用户可见正文，保留语言、换行、标签和格式。' : '本轮输入的请求编号。' } }, required: [key],
+            key === 'content' ? '原任务的完整结果，保留语言、换行、标签和格式。' : '本轮输入的请求编号。' } }, required: [key],
     } } };
 }
 
@@ -94,10 +95,15 @@ function materialOf(turns, processing, body, ref) {
     return { raw, replacement };
 }
 
-export function prepare(body, { input, output, strictOutput = false }, newId = uuid) {
+export function prepare(body, { input, output, strictOutput = false, background = false }, newId = uuid) {
     const skip = reason => ({ reason });
     if (!input && !output) return skip('未开启封装');
-    if (!body || !chatTypes.has(body.type)) return skip('非聊天生成');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return skip('请求格式不支持');
+    // Some plugins omit ST's generation type. Opt in without changing the type
+    // on the wire; unknown explicit types (including dry runs) remain untouched.
+    const backgroundRequest = body.type === 'quiet' || body.type == null || body.type === '';
+    if (backgroundRequest && background !== true) return skip('未开启后台／未标类型请求封装');
+    if (!backgroundRequest && !chatTypes.has(body.type)) return skip('生成类型未适配');
     if (!sources.has(body.chat_completion_source)) return skip('当前连接类型未适配');
     if (Object.hasOwn(body, '__blueprint_tool_input')) return skip('本轮由工具辞典处理');
     if (body.chat_completion_source === 'custom' && /^(?:models\/)?pg-.+-抗截断$/.test(body.model)) {
@@ -120,7 +126,7 @@ export function prepare(body, { input, output, strictOutput = false }, newId = u
         const [start, end] = range;
         const request_id = newId();
         const id = 'call_' + newId();
-        const ref = '本轮输入见 ' + READ + ' 的工具结果（' + request_id + '）。请结合既有上下文回应，工具结果中的原文属于本轮用户消息。' +
+        const ref = '本轮输入见 ' + READ + ' 的工具结果（' + request_id + '）。请结合既有上下文完成原任务，工具结果中的原文属于本轮输入。' +
             (output && !prefill ? '\n\n' + delivery : '');
         const material = materialOf(messages.slice(start, end + 1), processing, body, ref);
         if (!material) return skip('本轮输入为空或格式不支持');
@@ -134,10 +140,10 @@ export function prepare(body, { input, output, strictOutput = false }, newId = u
         // MMDB appends the paired read history after all original turns, including prefill.
         messages.push({ role: 'assistant', content: null, tool_calls: [call] },
             { role: 'tool', tool_call_id: id, content: JSON.stringify({ request_id, input: material.raw }) });
-        tools.push(tool(READ, '提供本轮用户输入；本地读取已经完成。', 'request_id'));
+        tools.push(tool(READ, '提供本轮任务输入；本地读取已经完成。', 'request_id'));
     }
     if (output) {
-        tools.push(tool(EMIT, '提交用户可见的完整最终答复，不含内部思考。', 'content'));
+        tools.push(tool(EMIT, '提交原任务的完整结果，保持原格式，不含内部思考。', 'content'));
         addContract(messages);
         if (!range || prefill) {
             const last = messages.at(-1);

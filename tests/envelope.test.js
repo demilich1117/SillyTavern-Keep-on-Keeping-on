@@ -86,7 +86,7 @@ test('非流式只交付原样正文；保留用量及独立思考，没有额�
     assert.deepEqual(reply.usage, { total_tokens: 40 });
 });
 
-test('不接管外部请求、静默生成、其他工具、非工具型后处理和结构化输出', async () => {
+test('默认不接管外部请求、静默生成、其他工具、非工具型后处理和结构化输出', async () => {
     for (const [body, url, opts] of [
         [req(), 'https://elsewhere.invalid' + path], [req(), '/api/other'], [req(), path, {}],
         ...[{ type: 'quiet' }, { chat_completion_source: 'claude' }, { tools: [{}] }, { tool_choice: 'none' },

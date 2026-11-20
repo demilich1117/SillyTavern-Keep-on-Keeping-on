@@ -2,6 +2,7 @@
   "display_name": "Keep on Keeping on · 工具封装",
   "loading_order": 100,
   "js": "index.js",
+  "css": "style.css",
   "author": "Keep on Keeping on",
-  "version": "1.3.0"
+  "version": "1.3.1"
 }
